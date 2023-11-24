@@ -5,6 +5,7 @@
 
 # vim cache files
 *.swp
+*.swo
 
 # auto generated files
 *.logrt
