@@ -10,10 +10,29 @@
 
 #include <Common/MultiVersion.h>
 
+// MILIND
+namespace Poco {class Logger;}
+
 namespace DB
 {
 class IBackup;
 using BackupPtr = std::shared_ptr<const IBackup>;
+
+struct SketchConfiguration
+{
+    String name;
+    unsigned int levels;
+    unsigned int rows;
+    unsigned int width;
+
+    SketchConfiguration(String name_, unsigned int levels_, unsigned int rows_, unsigned int width_)
+    {
+        name = name_;
+        levels = levels_;
+        rows = rows_;
+        width = width_;
+    }
+};
 
 /** Implements storage in the RAM.
   * Suitable for temporary data.
@@ -30,7 +49,11 @@ public:
         ColumnsDescription columns_description_,
         ConstraintsDescription constraints_,
         const String & comment,
-        bool compress_ = false);
+        bool compress_ = false,
+        // MILIND
+        const String & sketch_dp_configuration_ = "",
+        const String & sketch_cp_configuration_ = ""
+        );
 
     String getName() const override { return "Memory"; }
 
@@ -44,6 +67,7 @@ public:
     };
 
     StorageSnapshotPtr getStorageSnapshot(const StorageMetadataPtr & metadata_snapshot, ContextPtr query_context) const override;
+    StorageSnapshotPtr getStorageSnapshot(const StorageMetadataPtr & metadata_snapshot, const ASTPtr & query, ContextPtr query_context) const override;
 
     void read(
         QueryPlan & query_plan,
@@ -134,6 +158,18 @@ private:
     bool compress;
 
     friend class ReadFromMemoryStorageStep;
+    
+    // MILIND
+    Poco::Logger * log;
+    String sketch_dp_configuration;
+    String sketch_cp_configuration;
+    std::unordered_map<String, SketchConfiguration> sketch_dp_configuration_map;
+    std::unordered_map<String, String> sketch_cp_configuration_map;
+
+    void parse_sketch_configurations();
+    String lookupSketchName(String metric_name) const override;
+    std::shared_ptr<const Blocks> convertSketchToBlocks(const String & query) const;
+    String getMetricName(const ASTPtr & query) const;
 };
 
-}
+};

@@ -18,9 +18,10 @@
 #include <Common/RWLock.h>
 #include <Common/TypePromotion.h>
 
+#include <Sketches/ISketch.h>
+
 #include <optional>
 #include <compare>
-
 
 namespace DB
 {
@@ -98,7 +99,12 @@ public:
     /// Storage metadata can be set separately in setInMemoryMetadata method
     explicit IStorage(StorageID storage_id_)
         : storage_id(std::move(storage_id_))
-        , metadata(std::make_unique<StorageInMemoryMetadata>()) {}
+        , metadata(std::make_unique<StorageInMemoryMetadata>())
+        // MILIND
+        //, count_sketch_array(SKETCH_ROWS, std::vector<sketch_t>(SKETCH_COLUMNS, 0))
+    {
+        sketch_total = 0;
+    }
 
     IStorage(const IStorage &) = delete;
     IStorage & operator=(const IStorage &) = delete;
@@ -705,10 +711,24 @@ public:
         return std::make_shared<StorageSnapshot>(*this, metadata_snapshot);
     }
 
-    /// Creates a storage snapshot from given metadata and columns, which are used in query.
-    virtual StorageSnapshotPtr getStorageSnapshotForQuery(const StorageMetadataPtr & metadata_snapshot, const ASTPtr & /*query*/, ContextPtr query_context) const
+    // MILIND
+    virtual StorageSnapshotPtr getStorageSnapshot(const StorageMetadataPtr & metadata_snapshot, const ASTPtr & /*query*/, ContextPtr /*query_context*/) const
     {
-        return getStorageSnapshot(metadata_snapshot, query_context);
+        return std::make_shared<StorageSnapshot>(*this, metadata_snapshot);
+    }
+
+    /// Creates a storage snapshot from given metadata and columns, which are used in query.
+    virtual StorageSnapshotPtr getStorageSnapshotForQuery(const StorageMetadataPtr & metadata_snapshot, const ASTPtr & query, ContextPtr query_context) const
+    {
+        // MILIND
+        if (read_from_sketch)
+        {
+            return getStorageSnapshot(metadata_snapshot, query, query_context);
+        }
+        else
+        {
+            return getStorageSnapshot(metadata_snapshot, query_context);
+        }
     }
 
     /// Creates a storage snapshot but without holding a data specific to storage.
@@ -716,6 +736,8 @@ public:
     {
         return getStorageSnapshot(metadata_snapshot, query_context);
     }
+
+
 
     /// A helper to implement read()
     static void readFromPipe(
@@ -737,6 +759,17 @@ private:
     /// DROP-like queries take this lock for write (lockExclusively), to be sure
     /// that all table threads finished.
     mutable RWLock drop_lock = RWLockImpl::create();
+
+/// MILIND
+protected:
+    bool read_from_sketch = false;
+    std::unordered_map<String, SketchPtr> sketches_map;
+    uint64_t sketch_total;
+
+public:
+    void enableReadFromSketch() {read_from_sketch = true;}
+    void disableReadFromSketch() {read_from_sketch = false;}
+    virtual String lookupSketchName(String /*metric_name*/) const { return ""; }
 };
 
 }

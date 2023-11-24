@@ -34,6 +34,18 @@
 #include <Disks/TemporaryFileOnDisk.h>
 #include <IO/copyData.h>
 
+// MILIND
+#include <Common/logger_useful.h>
+#include <DataTypes/DataTypeFactory.h>
+#include <DataTypes/DataTypeArray.h>
+#include <Sketches/Config.h>
+#include <Parsers/ASTFunction.h>
+
+//#include <Sketches/CountSketch.h>
+//#include <Sketches/CountMin.h>
+//#include <Sketches/MRAC.h>
+//#include <Sketches/LC.h>
+#include <Sketches/SketchFactory.h>
 
 namespace DB
 {
@@ -50,10 +62,16 @@ public:
     MemorySink(
         StorageMemory & storage_,
         const StorageMetadataPtr & metadata_snapshot_,
-        ContextPtr context)
+        ContextPtr context_)
+        // MILIND
+        //std::map<String, SketchConfiguration> sketch_dp_configuration_map_)
         : SinkToStorage(metadata_snapshot_->getSampleBlock())
         , storage(storage_)
-        , storage_snapshot(storage_.getStorageSnapshot(metadata_snapshot_, context))
+        , storage_snapshot(storage_.getStorageSnapshot(metadata_snapshot_, context_))
+        // MILIND
+        , log(&Poco::Logger::get("MemorySink"))
+        , context(context_)
+        //, sketch_dp_configuration_map(sketch_dp_configuration_map_)
     {
     }
 
@@ -104,6 +122,52 @@ public:
         storage.data.set(std::move(new_data));
         storage.total_size_bytes.fetch_add(inserted_bytes, std::memory_order_relaxed);
         storage.total_size_rows.fetch_add(inserted_rows, std::memory_order_relaxed);
+
+        // MILIND: update sketch
+        const auto & settings = context->getSettingsRef();
+        if (settings.use_sketchdb)
+        {
+            const ColumnWithTypeAndName* flowkey_column;
+            size_t flowkey_column_size;
+            flowkey_t flowkey;
+
+            for (const auto & block : new_blocks)
+            {
+                // check if block has flowkey column
+                flowkey_column = block.findByName("flowkey");
+                if (flowkey_column == nullptr)
+                {
+                    break;
+                }
+                //LOG_WARNING(log, "Updating count sketch");
+                flowkey_column_size = flowkey_column->column->size();
+                //LOG_WARNING(log, "Updating count sketch for a block with column size {}", flowkey_column_size);
+                for (uint32_t data_idx = 0; data_idx < flowkey_column_size; data_idx++)
+                {
+                    flowkey = flowkey_column->column->getUInt(data_idx);
+                    for (auto it = storage.sketches_map.cbegin(); it != storage.sketches_map.cend(); it++)
+                    {
+                        it->second->update(flowkey);
+                    }
+                    //storage.count_sketch->update(flowkey);
+
+                    //for (uint32_t sketch_row_index = 0; sketch_row_index < sketch_dp_configuration_map.at("cs").rows; sketch_row_index++)
+                    //{
+                    //    //increment = res_hash(flowkey, row_index, 2);
+                    //    //increment = int32_t(sketch_row_index % 2) * 2 - 1;
+                    //    increment = XXH32(static_cast<const void*>(&flowkey), sizeof(flowkey), sketch_row_index + sketch_dp_configuration_map.at("cs").rows) % 2;
+                    //    increment = increment * 2 - 1;
+                    //    //column_index = index_hash(flowkey, row_index, SKETCH_COLUMNS);
+                    //    //sketch_column_index = flowkey % SKETCH_COLUMNS;
+                    //    sketch_column_index = XXH32(static_cast<const void*>(&flowkey), sizeof(flowkey), sketch_row_index) % sketch_dp_configuration_map.at("cs").width;
+                    //    //storage.count_sketch_array[sketch_row_index][sketch_column_index] += increment;
+                    //    storage.count_sketch->getData()[sketch_row_index][sketch_column_index] += increment;
+                    //    //LOG_WARNING(log, "Updating count sketch row {} column {} increment {}", sketch_row_index, sketch_column_index, increment);
+                    //}
+                }
+                storage.sketch_total += block.rows();
+            }
+        }
     }
 
 private:
@@ -111,29 +175,250 @@ private:
 
     StorageMemory & storage;
     StorageSnapshotPtr storage_snapshot;
-};
 
+    // MILIND
+    Poco::Logger * log;
+    ContextPtr context;
+    std::map<String, SketchConfiguration> sketch_dp_configuration_map;
+};
 
 StorageMemory::StorageMemory(
     const StorageID & table_id_,
     ColumnsDescription columns_description_,
     ConstraintsDescription constraints_,
     const String & comment,
-    bool compress_)
+    bool compress_,
+    const String & sketch_dp_configuration_,
+    const String & sketch_cp_configuration_)
     : IStorage(table_id_), data(std::make_unique<const Blocks>()), compress(compress_)
+    , log(&Poco::Logger::get("StorageMemory"))
 {
     StorageInMemoryMetadata storage_metadata;
     storage_metadata.setColumns(std::move(columns_description_));
     storage_metadata.setConstraints(std::move(constraints_));
     storage_metadata.setComment(comment);
     setInMemoryMetadata(storage_metadata);
+
+    // MILIND
+    sketch_dp_configuration = sketch_dp_configuration_;
+    sketch_cp_configuration = sketch_cp_configuration_;
+
+    if (sketch_dp_configuration != "")
+    {
+        parse_sketch_configurations();
+
+        unsigned int levels, rows, width;
+
+        for(auto it = sketch_dp_configuration_map.cbegin(); it != sketch_dp_configuration_map.cend(); it++)
+        {
+            levels = it->second.levels;
+            rows = it->second.rows;
+            width = it->second.width;
+
+            // MILIND
+            const SketchFactory::Arguments args{
+                .levels = levels,
+                .rows = rows,
+                .width = width
+            };
+
+            sketches_map.emplace(it->first, SketchFactory::instance().get(it->first, args));
+            //if (it->first == "cs")
+            //{
+            //    sketches_map.emplace(it->first, std::make_shared<CountSketch>(levels, rows, width));
+            //}
+            //else if (it->first == "cm")
+            //{
+            //    sketches_map.emplace(it->first, std::make_shared<CountMin>(levels, rows, width));
+            //}
+            //else if (it->first == "mrac")
+            //{
+            //    sketches_map.emplace(it->first, std::make_shared<MRAC>(levels, rows, width));
+            //}
+            //else if (it->first == "lc")
+            //{
+            //    sketches_map.emplace(it->first, std::make_shared<LC>(levels, rows, width));
+            //}
+        }
+    }
+}
+
+std::vector<String> split(const String input, const String delimiter)
+{
+    std::vector<String> result;
+    size_t last = 0, next = 0;
+    String token;
+    while ((next = input.find(delimiter, last)) != String::npos)
+    {
+        token = input.substr(last, next - last);
+        result.push_back(token);
+        last = next + 1;
+    }
+    result.push_back(input.substr(last));
+    return result;
+}
+
+void StorageMemory::parse_sketch_configurations()
+{
+    // parse DP configuration
+    std::vector<String> sketch_tokens = split(sketch_dp_configuration, ";");
+    std::vector<String> sketch_config_tokens;
+    String sketch, query;
+    unsigned int level, rows, width;
+
+    for (auto & sketch_token : sketch_tokens)
+    {
+        sketch_token.erase(std::remove(sketch_token.begin(), sketch_token.end(), '('), sketch_token.end());
+        sketch_token.erase(std::remove(sketch_token.begin(), sketch_token.end(), ')'), sketch_token.end());
+        sketch_config_tokens = split(sketch_token, ",");
+        sketch = sketch_config_tokens[0];
+        level = atoi(sketch_config_tokens[1].c_str());
+        rows = atoi(sketch_config_tokens[2].c_str());
+        width = atoi(sketch_config_tokens[3].c_str());
+        //LOG_WARNING(log, "sketch {} level {} row {} width {}", sketch, level, rows, width);
+        sketch_dp_configuration_map.emplace(std::piecewise_construct, std::forward_as_tuple(sketch), std::forward_as_tuple(sketch, level, rows, width));
+    }
+
+    // parse CP configuration
+    sketch_tokens = split(sketch_cp_configuration, ";");
+    for (auto & sketch_token : sketch_tokens)
+    {
+        sketch_token.erase(std::remove(sketch_token.begin(), sketch_token.end(), '('), sketch_token.end());
+        sketch_token.erase(std::remove(sketch_token.begin(), sketch_token.end(), ')'), sketch_token.end());
+        sketch_config_tokens = split(sketch_token, ",");
+        query = sketch_config_tokens[0];
+        sketch = sketch_config_tokens[1];
+        sketch_cp_configuration_map.emplace(query, sketch);
+    }
+}
+
+String StorageMemory::lookupSketchName(String metric_name) const
+{
+    //if (metric_name.find("heavy_hitter") != String::npos)
+    //{
+    //    metric_name = "heavy_hitters";
+    //}
+    if (sketch_cp_configuration_map.find(metric_name) != sketch_cp_configuration_map.end())
+    {
+        return sketch_cp_configuration_map.at(metric_name);
+    }
+    else
+    {
+        return "";
+    }
+}
+
+std::shared_ptr<const Blocks> StorageMemory::convertSketchToBlocks(const String & query_name) const
+{
+    const String sketch_name = lookupSketchName(query_name);
+    if (sketch_name == "")
+    {
+        return nullptr;
+    }
+    auto sketch = sketches_map.at(sketch_name);    
+
+    unsigned int num_columns = sketch->getNumberOfColumns(query_name);
+
+    ColumnsWithTypeAndName columns(num_columns);
+
+    unsigned int max_number_of_rows = 0;
+
+    for (unsigned int i = 0; i < num_columns; i++)
+    {
+        if (sketch->getNumberOfRows(i) > max_number_of_rows)
+        {
+            max_number_of_rows = sketch->getNumberOfRows(i);
+        }
+    }
+
+    for (unsigned int i = 0; i < num_columns; i++)
+    {
+        auto sketch_data_type = sketch->getColumnType(i);
+        MutableColumnPtr column = sketch_data_type->createColumn();
+        column->reserve(max_number_of_rows);
+        //LOG_WARNING(log, "column_idx {} sketch_data_type {}", i, sketch_data_type->getName());
+        sketch->insertIntoColumn(column, i, sketch_total);
+        // fill column with NULL values so that it has max_number_of_rows rows
+        column->insertManyDefaults(max_number_of_rows - sketch->getNumberOfRows(i));
+        columns[i] = ColumnWithTypeAndName(std::move(column), sketch_data_type, std::string("sketch_column_") + std::to_string(i+1));
+    }
+
+    Blocks sketch_blocks {Block(columns)};
+
+    return std::make_shared<const Blocks>(std::move(sketch_blocks));
 }
 
 StorageSnapshotPtr StorageMemory::getStorageSnapshot(const StorageMetadataPtr & metadata_snapshot, ContextPtr /*query_context*/) const
 {
     auto snapshot_data = std::make_unique<SnapshotData>();
+    
     snapshot_data->blocks = data.get();
 
+    if (!hasDynamicSubcolumns(metadata_snapshot->getColumns()))
+        return std::make_shared<StorageSnapshot>(*this, metadata_snapshot, ColumnsDescription{}, std::move(snapshot_data));
+
+    auto object_columns = getConcreteObjectColumns(
+        snapshot_data->blocks->begin(),
+        snapshot_data->blocks->end(),
+        metadata_snapshot->getColumns(),
+        [](const auto & block) -> const auto & { return block.getColumnsWithTypeAndName(); });
+
+    return std::make_shared<StorageSnapshot>(*this, metadata_snapshot, std::move(object_columns), std::move(snapshot_data));
+}
+
+String StorageMemory::getMetricName(const ASTPtr & query) const
+{
+    const auto select_query = query->as<ASTSelectQuery>();
+    assert(select_query);
+    const auto & select_expression_list = select_query->select()->children;
+    if (select_expression_list.size() != 1)
+    {
+        return "";
+    }
+    const auto & select_expression = select_expression_list.at(0);
+    const auto & function_expression = select_expression->as<ASTFunction>();
+    if (!function_expression)
+    {
+        return "";
+    }
+    assert(function_expression);
+    //assert(function_expression->arguments.size() == 1);
+    //auto & argument = function_expression->arguments.at(0);
+    //assert(argument->as<ASTFunction>());
+    //auto & function = argument->as<ASTFunction &>();
+    const auto & name = function_expression->name;
+    //LOG_WARNING(log, "function_expression name {}", name);
+    return name.substr(0, name.find("_sketch"));
+}
+
+// MILIND 
+StorageSnapshotPtr StorageMemory::getStorageSnapshot(const StorageMetadataPtr & metadata_snapshot, const ASTPtr & query, ContextPtr query_context) const
+{
+    if (!read_from_sketch)
+    {
+        return getStorageSnapshot(metadata_snapshot, query_context);
+    }
+
+    auto snapshot_data = std::make_unique<SnapshotData>();
+
+    LOG_WARNING(log, "read_from_sketch {}", read_from_sketch);
+    String metric = getMetricName(query);
+
+    if (metric == "")
+    {
+        return getStorageSnapshot(metadata_snapshot, query_context);
+    }
+
+    LOG_WARNING(log, "Getting storage snapshot for metric {}", metric);
+    snapshot_data->blocks = convertSketchToBlocks(metric);
+    if (snapshot_data->blocks == nullptr)
+    {
+        return getStorageSnapshot(metadata_snapshot, query_context);
+    }
+    LOG_WARNING(log, "finished convertSketchToBlocks");
+    
+    // copied from above
+    // TODO: put below code in a common function
     if (!hasDynamicSubcolumns(metadata_snapshot->getColumns()))
         return std::make_shared<StorageSnapshot>(*this, metadata_snapshot, ColumnsDescription{}, std::move(snapshot_data));
 
@@ -162,6 +447,7 @@ void StorageMemory::read(
 
 SinkToStoragePtr StorageMemory::write(const ASTPtr & /*query*/, const StorageMetadataPtr & metadata_snapshot, ContextPtr context, bool /*async_insert*/)
 {
+    //return std::make_shared<MemorySink>(*this, metadata_snapshot, context, sketch_dp_configuration_map, sketch_cp_configuration_map);
     return std::make_shared<MemorySink>(*this, metadata_snapshot, context);
 }
 
@@ -514,7 +800,9 @@ void registerStorageMemory(StorageFactory & factory)
         if (has_settings)
             settings.loadFromQuery(*args.storage_def);
 
-        return std::make_shared<StorageMemory>(args.table_id, args.columns, args.constraints, args.comment, settings.compress);
+        //return std::make_shared<StorageMemory>(args.table_id, args.columns, args.constraints, args.comment, settings.compress);
+        // MILIND
+        return std::make_shared<StorageMemory>(args.table_id, args.columns, args.constraints, args.comment, settings.compress, settings.sketch_dp_configuration, settings.sketch_cp_configuration);
     },
     {
         .supports_settings = true,
