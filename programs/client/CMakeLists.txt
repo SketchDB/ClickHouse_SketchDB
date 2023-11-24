@@ -11,6 +11,8 @@ set (CLICKHOUSE_CLIENT_LINK
         clickhouse_functions
         clickhouse_parsers
         string_utils
+        # MILIND
+        clickhouse_sketches
 )
 
 if (TARGET ch_rust::skim)

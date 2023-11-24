@@ -96,6 +96,8 @@
 #include <Core/ServerSettings.h>
 #include <filesystem>
 #include <unordered_set>
+// MILIND
+#include <Sketches/registerSketches.h>
 
 #include "config.h"
 #include "config_version.h"
@@ -652,6 +654,8 @@ try
     registerRemoteFileMetadatas();
     registerSchedulerNodes();
     registerResourceManagers();
+    // MILIND
+    registerSketches();
 
     CurrentMetrics::set(CurrentMetrics::Revision, ClickHouseRevision::getVersionRevision());
     CurrentMetrics::set(CurrentMetrics::VersionInteger, ClickHouseRevision::getVersionInteger());
