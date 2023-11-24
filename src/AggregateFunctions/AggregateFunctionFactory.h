@@ -53,6 +53,9 @@ struct AggregateFunctionWithProperties
 class AggregateFunctionFactory final : private boost::noncopyable, public IFactoryWithAliases<AggregateFunctionWithProperties>
 {
 public:
+    // MILIND
+    AggregateFunctionFactory() : log(&Poco::Logger::get("AggregateFunctionFactory")) {}
+
     static AggregateFunctionFactory & instance();
 
     /// Register a function by its name.
@@ -102,6 +105,8 @@ private:
 
     String getFactoryName() const override { return "AggregateFunctionFactory"; }
 
+    // MILIND
+    Poco::Logger * log;
 };
 
 struct AggregateUtils

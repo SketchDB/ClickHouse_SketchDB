@@ -84,6 +84,13 @@ void registerAggregateFunctionFlameGraph(AggregateFunctionFactory &);
 void registerAggregateFunctionKolmogorovSmirnovTest(AggregateFunctionFactory & factory);
 void registerAggregateFunctionLargestTriangleThreeBuckets(AggregateFunctionFactory & factory);
 
+// MILIND
+void registerAggregateFunctionEntropyCountSketch(AggregateFunctionFactory &);
+void registerAggregateFunctionHeavyHitterCardinalitiesCountSketch(AggregateFunctionFactory &);
+void registerAggregateFunctionHeavyHitterFlowkeysCountSketch(AggregateFunctionFactory &);
+void registerAggregateFunctionEntropyMRAC(AggregateFunctionFactory &);
+void registerAggregateFunctionCardinalityLC(AggregateFunctionFactory &);
+
 class AggregateFunctionCombinatorFactory;
 void registerAggregateFunctionCombinatorIf(AggregateFunctionCombinatorFactory &);
 void registerAggregateFunctionCombinatorArray(AggregateFunctionCombinatorFactory &);
@@ -179,6 +186,13 @@ void registerAggregateFunctions()
         registerAggregateFunctionFlameGraph(factory);
         registerAggregateFunctionKolmogorovSmirnovTest(factory);
         registerAggregateFunctionLargestTriangleThreeBuckets(factory);
+
+        // MILIND
+        registerAggregateFunctionEntropyCountSketch(factory);
+        registerAggregateFunctionHeavyHitterCardinalitiesCountSketch(factory);
+        registerAggregateFunctionHeavyHitterFlowkeysCountSketch(factory);
+        registerAggregateFunctionEntropyMRAC(factory);
+        registerAggregateFunctionCardinalityLC(factory);
 
         registerWindowFunctions(factory);
     }
