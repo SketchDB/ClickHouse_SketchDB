@@ -255,6 +255,10 @@ private:
 
     /// Reuse already built sets for multiple passes of analysis, possibly across interpreters.
     PreparedSetsPtr prepared_sets;
+
+    // MILIND
+    void addSketchToQueryPtr();
+    bool added_sketch_to_query_ptr = false;
 };
 
 }

@@ -368,6 +368,43 @@ InterpreterSelectQuery::InterpreterSelectQuery(
         prepared_sets_)
 {}
 
+void InterpreterSelectQuery::addSketchToQueryPtr()
+{
+    auto query = getSelectQuery().select();
+    auto & elements = query->children;
+    for (unsigned int i = 0; i < elements.size(); i++)
+    {
+        if (elements[i]->as<ASTFunction>())
+        {
+            auto element = elements[i]->as<ASTFunction>();
+            String name = element->name;
+            // if "sketches" is present in name
+            if (name.find("_sketch") != String::npos)
+            {
+                //LOG_WARNING(log, "original name: {}", name);
+                //LOG_WARNING(log, "original arguments {} {}", element->arguments->getID(), element->arguments->children.size());
+                auto arguments = element->arguments->children;
+                // find the substring before "_sketch"
+                String metric_name = name.substr(0, name.find("_sketch"));
+                // lookup metric_name in storage->sketch_cp_configuration_map
+                String sketch_name = storage->lookupSketchName(metric_name);
+                if (sketch_name == "")
+                {
+                    LOG_WARNING(log, "Did not find sketch for metric {}", metric_name);
+                    continue;
+                }
+                //LOG_WARNING(log, "Found sketch name {} for metric name {}", sketch_name, metric_name);
+                // create ASTFunction with name sketch_name
+                auto sketch_function = makeASTFunction(name + "_" + sketch_name, arguments);
+                //LOG_WARNING(log, "new name: {}", sketch_function->name);
+                //LOG_WARNING(log, "new arguments {} {}", sketch_function->arguments->getID(), sketch_function->arguments->children.size());
+                elements[i] = sketch_function;
+                added_sketch_to_query_ptr = true;
+            }
+        }
+    }
+}
+
 InterpreterSelectQuery::InterpreterSelectQuery(
     const ASTPtr & query_ptr_,
     const ContextMutablePtr & context_,
@@ -377,6 +414,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
     const Names & required_result_column_names,
     const StorageMetadataPtr & metadata_snapshot_,
     PreparedSetsPtr prepared_sets_)
+    // MILIND
     /// NOTE: the query almost always should be cloned because it will be modified during analysis.
     : IInterpreterUnionOrSelectQuery(options_.modify_inplace ? query_ptr_ : query_ptr_->clone(), context_, options_)
     , storage(storage_)
@@ -440,6 +478,12 @@ InterpreterSelectQuery::InterpreterSelectQuery(
         // Mark uses_view_source if the returned storage is the same as the one saved in viewSource
         uses_view_source |= storage && storage == context->getViewSource();
         got_storage_from_query = true;
+    }
+
+    // MILIND
+    if (storage) 
+    {
+        addSketchToQueryPtr();
     }
 
     if (storage)
@@ -2567,6 +2611,24 @@ void InterpreterSelectQuery::executeFetchColumns(QueryProcessingStage::Enum proc
         query_info.storage_limits = std::make_shared<StorageLimitsList>(storage_limits);
 
         query_info.settings_limit_offset_done = options.settings_limit_offset_done;
+        // MILIND
+        // if there is an aggregate function that contains the substring "sketch" and sketchdb is enabled, enable read_from_sketch
+        AggregateDescriptions aggregates = query_analyzer->aggregates();
+        for(const auto & aggregate : aggregates)
+        {
+            if (settings.use_sketchdb && aggregate.function->getName().find("_sketch") != String::npos)
+            {
+                storage->enableReadFromSketch();
+                LOG_WARNING(log, "enabled read from sketch");
+                // MILIND: re-read storage snapshot after enableReadFromSketch()
+                if (options.only_analyze)
+                    storage_snapshot = storage->getStorageSnapshotWithoutData(metadata_snapshot, context);
+                else
+                    storage_snapshot = storage->getStorageSnapshotForQuery(metadata_snapshot, query_ptr, context);
+                LOG_WARNING(log, "re-read snapshot");
+                // TODO: when/where should we disableReadFromSketch()?
+            }
+        }
         storage->read(query_plan, required_columns, storage_snapshot, query_info, context, processing_stage, max_block_size, max_streams);
 
         if (context->hasQueryContext() && !options.is_internal)
