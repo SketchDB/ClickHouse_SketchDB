@@ -40,7 +40,9 @@ namespace ErrorCodes
   *  SELECT range(10000000)
   * will take less than 500ms on your machine.
   */
-static constexpr size_t max_array_size_as_field = 1000000;
+//static constexpr size_t max_array_size_as_field = 1000000;
+// MILIND
+static constexpr size_t max_array_size_as_field = 10000000;
 
 
 ColumnArray::ColumnArray(MutableColumnPtr && nested_column, MutableColumnPtr && offsets_column)
