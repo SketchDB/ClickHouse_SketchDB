@@ -21,7 +21,8 @@
 
             [1]: https://github.com/pocoproject/poco/blob/poco-1.9.4-release/Foundation/include/Poco/Logger.h#L105-L114
         -->
-        <level>trace</level>
+        <!-- <level>trace</level> -->
+        <level>information</level>
         <log>/var/log/clickhouse-server/clickhouse-server.log</log>
         <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
         <!-- Rotation policy
@@ -1074,6 +1075,9 @@
         <buffer_size_rows_flush_threshold>524288</buffer_size_rows_flush_threshold>
         <!-- Indication whether logs should be dumped to the disk in case of a crash -->
         <flush_on_crash>false</flush_on_crash>
+        <query_profiler_cpu_time_period_ns>1000000000</query_profiler_cpu_time_period_ns>
+        <query_profiler_wall_time_period_ns>1000000000</query_profiler_wall_time_period_ns>
+        <allow_introspection_functions>0</allow_introspection_functions>
     </trace_log>
 
     <!-- Query thread log. Has information about all threads participated in query execution.
